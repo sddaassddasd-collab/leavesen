@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>掃落葉 (Leaf Sweeping Game)</title>
+  <style>
+    :root{--radius:16px}
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans TC","Helvetica Neue",Arial,sans-serif;
+      background:linear-gradient(180deg,#f7fbff,#f1f5f9 60%);
+      color:#0f172a;
+      user-select:none;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .stage{
+      position:relative;
+      height:100%;
+      overflow:hidden;
+    }
+    .hud{
+      position:fixed; left:50%; top:16px; transform:translateX(-50%);
+      background:#ffffffcc; backdrop-filter:blur(8px);
+      box-shadow:0 8px 30px rgba(0,0,0,.12);
+      border-radius:999px; padding:10px 16px; display:flex; gap:10px; align-items:center;
+      z-index:10;
+    }
+    .badge{background:#eef2ff;color:#3730a3;border-radius:999px;padding:6px 10px;font-weight:700}
+
+    .leaf{
+      position:absolute; display:grid; place-items:center;
+      width:56px; height:56px; border-radius:50%;
+      transition: transform .15s ease, opacity .25s ease;
+      will-change: transform, opacity;
+      cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><text y='48' font-size='48'>🧹</text></svg>") 0 48, auto;
+    }
+    .leaf span{font-size: clamp(28px, 4vw, 64px); filter: drop-shadow(0 2px 2px rgba(0,0,0,.15));}
+    .leaf:hover{ transform: scale(1.06) rotate(var(--rot, 0deg)); }
+    .leaf.gone{ opacity:0; transform: scale(.75) rotate(-20deg); }
+
+    .toast{ position:fixed; inset:0; display:grid; place-items:center; background:rgba(0,0,0,.4);
+            opacity:0; pointer-events:none; transition:opacity .25s ease; }
+    .toast.show{ opacity:1; pointer-events:auto; }
+    .toast .box{ background:#fff; padding:28px 24px; border-radius:var(--radius);
+                 width:min(90vw,520px); text-align:center; box-shadow:0 12px 40px rgba(0,0,0,.18); }
+    .toast h2{ margin:0 0 10px; font-size:24px }
+    .toast p{ margin:0 0 16px; color:#334155 }
+    .btn{appearance:none;border:0;border-radius:999px;padding:10px 14px;font-weight:700;cursor:pointer}
+    .btn.primary{background:#10b981;color:#fff;box-shadow:0 6px 20px rgba(16,185,129,.35)}
+    .btn.secondary{background:#e2e8f0;color:#0f172a;}
+    .btn:active{transform:translateY(1px)}
+    .btns{display:flex;justify-content:center;gap:12px;}
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage" aria-label="掃落葉遊戲 (Leaf Sweeping Game)" role="group">
+    <div class="hud" aria-live="polite">
+      <span class="badge" id="counter">剩餘：10 (Remaining: 10)</span>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="dialog" aria-modal="true" aria-labelledby="doneTitle" aria-describedby="doneDesc">
+    <div class="box">
+      <h2 id="doneTitle">清掃完畢 🍂✅ (Cleaning Complete)</h2>
+      <p id="doneDesc">你已經把所有落葉清理乾淨！可以去上班了！<br>(You have swept all leaves! Time to go to work!)</p>
+      <div id="btnArea" class="btns">
+        <button id="closeGame" class="btn primary" type="button">關閉 (Close)</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const START = 10;
+      const MAX_ON_STAGE = 20;
+      const SPAWN_MS = 1500;
+      const WIN_URL = "https://ths.li/HhnZD4U";
+
+      const EMOJIS = ['🍁','🍂','🍃'];
+      const stage = document.getElementById('stage');
+      const counterEl = document.getElementById('counter');
+      const toast = document.getElementById('toast');
+      const closeGame = document.getElementById('closeGame');
+      const doneTitle = document.getElementById('doneTitle');
+      const doneDesc = document.getElementById('doneDesc');
+      const btnArea = document.getElementById('btnArea');
+
+      let remaining = 0;
+      let playing = true;
+      let spawnTimer = null;
+
+      function rand(min, max){ return Math.random() * (max - min) + min; }
+
+      function updateCounter(){
+        counterEl.textContent = `剩餘：${remaining} (Remaining: ${remaining})`;
+      }
+
+      function clearLeaves(){
+        stage.querySelectorAll('.leaf').forEach(el => el.remove());
+      }
+
+      function positionLeafEl(leaf, span){
+        const rect = stage.getBoundingClientRect();
+        const margin = 16;
+        const hudHeight = 70;
+        const size = Math.round(rand(42, 78));
+        span.style.fontSize = size + 'px';
+        const maxLeft = rect.width - size - margin;
+        const maxTop  = rect.height - size - margin;
+        const left = Math.max(margin, rand(margin, Math.max(margin, maxLeft)));
+        const top  = Math.max(hudHeight, rand(hudHeight, Math.max(hudHeight, maxTop)));
+        leaf.style.left = left + 'px';
+        leaf.style.top = top + 'px';
+        const rot = Math.round(rand(-20, 20));
+        leaf.style.setProperty('--rot', rot + 'deg');
+        leaf.style.transform = `rotate(${rot}deg)`;
+      }
+
+      function makeLeaf(){
+        const leaf = document.createElement('button');
+        leaf.className = 'leaf';
+        leaf.type = 'button';
+        leaf.setAttribute('aria-label','落葉，點擊清掃 (Leaf, click to sweep)');
+        const span = document.createElement('span');
+        span.textContent = EMOJIS[Math.floor(Math.random()*EMOJIS.length)];
+        leaf.appendChild(span);
+        positionLeafEl(leaf, span);
+
+        leaf.addEventListener('click', () => {
+          if(!playing || leaf.classList.contains('gone')) return;
+          leaf.classList.add('gone');
+          leaf.addEventListener('transitionend', () => leaf.remove(), { once:true });
+          remaining -= 1; updateCounter();
+          if(remaining <= 0){ win(); }
+        });
+
+        return leaf;
+      }
+
+      function addLeaf(){
+        if(!playing) return;
+        const leaf = makeLeaf();
+        stage.appendChild(leaf);
+        remaining += 1;
+        updateCounter();
+        if(remaining > MAX_ON_STAGE){ lose(); }
+      }
+
+      function startSpawning(){
+        stopSpawning();
+        spawnTimer = setInterval(addLeaf, SPAWN_MS);
+      }
+
+      function stopSpawning(){
+        if(spawnTimer){ clearInterval(spawnTimer); spawnTimer = null; }
+      }
+
+      function dropLeaves(initialCount = START){
+        clearLeaves();
+        remaining = 0;
+        for(let i=0;i<initialCount;i++){
+          addLeaf();
+          if(!playing) break;
+        }
+      }
+
+      function showToast(title, desc, buttonsHTML){
+        doneTitle.textContent = title;
+        doneDesc.innerHTML = desc;
+        btnArea.innerHTML = buttonsHTML;
+        toast.classList.add('show');
+      }
+
+      function win(){
+        if(!playing) return;
+        playing = false;
+        stopSpawning();
+
+        // ✅ 勝利時只顯示跳轉按鈕
+        showToast(
+          '清掃完畢 🍂✅ (Cleaning Complete)',
+          '你已經將啲落葉清晒啦！<br>(You have swept all leaves! )',
+          `
+          <a id="fallbackLink" class="btn primary" href="${WIN_URL}" target="_top" rel="noopener">
+            可以返工喇！Time to go to work!
+          </a>
+          
+          `
+        );
+
+        // JS 強制跳轉邏輯
+        const link = document.getElementById('fallbackLink');
+        link.addEventListener('click', function (e) {
+          e.preventDefault();
+          try {
+            window.top.location.replace(WIN_URL);
+          } catch (err) {
+            console.warn("Top navigation blocked:", err);
+            alert("這個頁面被上層以 sandbox 限制，無法取代整頁。請 A 網站加入 iframe 設定：allow-top-navigation-by-user-activation。");
+            document.getElementById('fallbackLink').click();
+          }
+        });
+      }
+
+      function lose(){
+        if(!playing) return;
+        playing = false;
+        stopSpawning();
+        showToast(
+          '落葉太多，清不完了！💨 (You Lose)',
+          `場上落葉超過 ${MAX_ON_STAGE} 片，清掃失敗。<br>(More than ${MAX_ON_STAGE} leaves piled up. You lose.)`,
+          `
+          <div class="btns">
+            <button id="restartGame" class="btn secondary">重新開始 (Restart)</button>
+            <button id="closeGame" class="btn primary">關閉 (Close)</button>
+          </div>
+          `
+        );
+
+        document.getElementById('restartGame').addEventListener('click', restart);
+        document.getElementById('closeGame').addEventListener('click', () => toast.classList.remove('show'));
+      }
+
+      function restart(){
+        toast.classList.remove('show');
+        playing = true;
+        dropLeaves(START);
+        startSpawning();
+      }
+
+      closeGame.addEventListener('click', () => toast.classList.remove('show'));
+
+      stage.addEventListener('keydown', (e) => {
+        const tgt = e.target;
+        if(tgt.classList && tgt.classList.contains('leaf') && (e.code==='Enter' || e.code==='Space')){
+          e.preventDefault();
+          tgt.click();
+        }
+      });
+
+      // 初始化
+      playing = true;
+      dropLeaves(START);
+      startSpawning();
+
+      window.addEventListener('resize', () => {
+        Array.from(stage.querySelectorAll('.leaf')).forEach(leaf => {
+          const span = leaf.querySelector('span');
+          positionLeafEl(leaf, span);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
